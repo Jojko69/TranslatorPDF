@@ -48,14 +48,13 @@ MODELE = {
         "etykieta":   "NLLB-1.3B  (szybszy,  ~2.6 GB VRAM)",
     },
     "helsinki": {
-        # opus-mt-en-pl nie istnieje na HuggingFace;
-        # opus-mt-en-sla tłumaczy EN → wszystkie języki słowiańskie,
-        # w tym polski przez prefiks >>pl<< w tokenizatorze Marian
-        "hf_nazwa":   "Helsinki-NLP/opus-mt-en-sla",
-        "ct2_katalog": "opus-mt-en-sla-ct2",
-        "tok_katalog": "opus-mt-en-sla-tok",
+        # opus-mt-en-pl nie istnieje; opus-mt-en-zlw to model dla języków
+        # zachodniosłowiańskich (PL, CS, HSB) — token >>pol<< wymusza polski
+        "hf_nazwa":   "Helsinki-NLP/opus-mt-en-zlw",
+        "ct2_katalog": "opus-mt-en-zlw-ct2",
+        "tok_katalog": "opus-mt-en-zlw-tok",
         "typ":        "marian",
-        "tgt_prefix": ">>pl<<",   # wymusza polski jako język docelowy
+        "tgt_prefix": ">>pol<<",   # wymusza polski jako język docelowy
         "etykieta":   "Helsinki opus-mt  (~300 MB,  CPU / GPU)",
     },
 }
