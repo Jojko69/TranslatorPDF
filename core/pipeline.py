@@ -143,6 +143,10 @@ def uruchom_tlumaczenie(
         przetlumaczone_teksty = []
         start_czasu = time.time()
 
+        # Dobierz bezpieczny batch_size na podstawie wolnej VRAM
+        batch_size = translator._dobierz_batch_size(klucz_modelu, batch_size)
+        log(f"Batch size: {batch_size} (dobrane automatycznie)")
+
         for batch_start in range(0, lacznie, batch_size):
             if anuluj.is_set():
                 kolejka.put(("anulowano",))

@@ -208,9 +208,17 @@ class Translator:
 
         cfg = MODELE[klucz]
 
-        # Zwolnij poprzedni model
+        # Zwolnij poprzedni model i wyczyść VRAM przed załadowaniem nowego
         self._ct2_model = None
         self._tokenizer = None
+        if self.urzadzenie == "cuda":
+            try:
+                import torch
+                torch.cuda.empty_cache()
+                wolna = torch.cuda.mem_get_info()[0] // (1024 ** 2)
+                _log(f"VRAM wolna przed załadowaniem: {wolna} MB")
+            except Exception:
+                pass
 
         _log("Ładowanie tokenizera...")
         from transformers import AutoTokenizer
@@ -230,7 +238,16 @@ class Translator:
             intra_threads=4,
         )
         self._aktywny_model = klucz
-        _log("Model załadowany.")
+
+        if self.urzadzenie == "cuda":
+            try:
+                import torch
+                uzyta = torch.cuda.memory_allocated() // (1024 ** 2)
+                _log(f"Model załadowany. VRAM zajęta przez model: {uzyta} MB")
+            except Exception:
+                _log("Model załadowany.")
+        else:
+            _log("Model załadowany.")
 
     # ------------------------------------------------------------------
     # Tłumaczenie
@@ -309,6 +326,26 @@ class Translator:
     # Pełne tłumaczenie z postępem
     # ------------------------------------------------------------------
 
+    def _dobierz_batch_size(self, klucz: str, zadany: int) -> int:
+        """
+        Dobiera bezpieczny batch_size na podstawie wolnej VRAM.
+        Chroni przed OOM przy dużych modelach (NLLB-3.3B zostawia mało wolnego).
+        """
+        if self.urzadzenie != "cuda":
+            return zadany
+        try:
+            import torch
+            wolna_mb = torch.cuda.mem_get_info()[0] // (1024 ** 2)
+            if wolna_mb < 500:
+                return 1
+            elif wolna_mb < 1500:
+                return 2
+            elif wolna_mb < 3000:
+                return 4
+            return zadany
+        except Exception:
+            return zadany
+
     def tlumacz_wszystko(
         self,
         teksty: List[str],
@@ -325,6 +362,9 @@ class Translator:
         """
         if not teksty:
             return []
+
+        # Dobierz bezpieczny batch_size na podstawie wolnej VRAM
+        batch_size = self._dobierz_batch_size(klucz, batch_size)
 
         wyniki: List[str] = []
         lacznie = len(teksty)
