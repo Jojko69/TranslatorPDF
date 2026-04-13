@@ -48,10 +48,14 @@ MODELE = {
         "etykieta":   "NLLB-1.3B  (szybszy,  ~2.6 GB VRAM)",
     },
     "helsinki": {
-        "hf_nazwa":   "Helsinki-NLP/opus-mt-en-pl",
-        "ct2_katalog": "opus-mt-en-pl-ct2",
-        "tok_katalog": "opus-mt-en-pl-tok",
+        # opus-mt-en-pl nie istnieje na HuggingFace;
+        # opus-mt-en-sla tłumaczy EN → wszystkie języki słowiańskie,
+        # w tym polski przez prefiks >>pl<< w tokenizatorze Marian
+        "hf_nazwa":   "Helsinki-NLP/opus-mt-en-sla",
+        "ct2_katalog": "opus-mt-en-sla-ct2",
+        "tok_katalog": "opus-mt-en-sla-tok",
         "typ":        "marian",
+        "tgt_prefix": ">>pl<<",   # wymusza polski jako język docelowy
         "etykieta":   "Helsinki opus-mt  (~300 MB,  CPU / GPU)",
     },
 }
@@ -273,9 +277,17 @@ class Translator:
         # Tokenizacja
         if jest_nllb:
             tokenizer.src_lang = cfg["src_lang"]
+            wejscie = teksty
+        else:
+            # Marian: jeśli model obsługuje wiele języków, dodaj prefiks >>pl<<
+            prefiks_jezykowy = cfg.get("tgt_prefix", "")
+            if prefiks_jezykowy:
+                wejscie = [f"{prefiks_jezykowy} {t}" for t in teksty]
+            else:
+                wejscie = teksty
 
         zakodowane = tokenizer(
-            teksty,
+            wejscie,
             return_tensors=None,
             padding=False,
             truncation=True,
@@ -289,10 +301,10 @@ class Translator:
 
         # Inferencja
         if jest_nllb:
-            prefiks = [[cfg["tgt_lang"]]] * len(teksty)
+            prefiks_ct2 = [[cfg["tgt_lang"]]] * len(teksty)
             wyniki = model.translate_batch(
                 zrodlowe_tokeny,
-                target_prefix=prefiks,
+                target_prefix=prefiks_ct2,
                 max_decoding_length=512,
                 beam_size=4,
             )
