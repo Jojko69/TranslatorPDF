@@ -192,12 +192,41 @@ class Translator:
             _log(f"Konwersja modelu {cfg['hf_nazwa']} -> CTranslate2 int8")
             _log("(Może potrwać kilka minut i wymaga dużo RAM — jednorazowo)")
             try:
+                import shutil
                 from ctranslate2.converters import TransformersConverter
-                konwerter = TransformersConverter(
-                    cfg["hf_nazwa"],
-                    low_cpu_mem_usage=True,
-                )
-                konwerter.convert(str(ct2_sciezka), quantization="int8", force=True)
+
+                if cfg.get("typ") == "marian":
+                    # Modele Marian mogą mieć rozbieżność o 1 między rozmiarem
+                    # słownika tokenizera a osadzeniami modelu (np. BiDi 32000 vs 31999).
+                    # Rozwiązanie: wczytaj model, wyrównaj osadzenia, zapisz tymczasowo,
+                    # skonwertuj z lokalnego katalogu.
+                    import tempfile
+                    from transformers import MarianMTModel, AutoTokenizer as _AutoTok
+                    _log("Pobieranie wag modelu Marian...")
+                    model = MarianMTModel.from_pretrained(cfg["hf_nazwa"])
+                    tok_lok = _AutoTok.from_pretrained(str(tok_sciezka))
+                    if model.config.vocab_size != len(tok_lok):
+                        _log(
+                            f"Wyrównuję słownik: model={model.config.vocab_size}"
+                            f" → tokenizer={len(tok_lok)}"
+                        )
+                        model.resize_token_embeddings(len(tok_lok))
+                    tmp = Path(tempfile.mkdtemp(prefix="ct2_conv_"))
+                    try:
+                        model.save_pretrained(str(tmp))
+                        tok_lok.save_pretrained(str(tmp))
+                        del model   # zwolnij RAM przed konwersją
+                        konwerter = TransformersConverter(str(tmp), low_cpu_mem_usage=True)
+                        konwerter.convert(str(ct2_sciezka), quantization="int8", force=True)
+                    finally:
+                        shutil.rmtree(tmp, ignore_errors=True)
+                else:
+                    konwerter = TransformersConverter(
+                        cfg["hf_nazwa"],
+                        low_cpu_mem_usage=True,
+                    )
+                    konwerter.convert(str(ct2_sciezka), quantization="int8", force=True)
+
                 _log("Model skonwertowany i zapisany.")
             except Exception as e:
                 _log(f"BŁĄD konwersji: {e}")
