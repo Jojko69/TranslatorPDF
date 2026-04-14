@@ -1,0 +1,27 @@
+# Środowisko wirtualne
+.venv/
+venv/
+env/
+
+# Cache Pythona
+__pycache__/
+*.pyc
+*.pyo
+
+# Modele AI (duże pliki pobierane automatycznie)
+models/
+
+# Pliki testowe i tymczasowe
+*.pdf
+*.docx
+*.tmp
+
+# Ustawienia lokalne
+config.json
+
+# IDE
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
