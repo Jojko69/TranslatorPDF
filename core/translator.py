@@ -3,10 +3,11 @@ core/translator.py
 ==================
 Backend tłumaczenia oparty na CTranslate2.
 
-Obsługuje trzy modele:
+Obsługuje cztery modele:
   1. MADLAD-3B  – google/madlad400-3b-mt             (~3 GB VRAM)
   2. NLLB-1.3B  – facebook/nllb-200-distilled-1.3B  (~2.6 GB VRAM)
   3. Helsinki   – Helsinki-NLP/opus-mt-en-zlw        (~300 MB)
+  4. BiDi       – allegro/BiDi-eng-pol               (~400 MB)
 
 Przy pierwszym użyciu modelu:
   - Pobiera tokenizer z HuggingFace i zapisuje lokalnie
@@ -59,6 +60,18 @@ MODELE = {
         "typ":        "marian",
         "tgt_prefix": ">>pol<<",   # wymusza polski jako język docelowy
         "etykieta":   "Helsinki opus-mt  (~300 MB,  CPU / GPU)",
+    },
+    "bidi": {
+        # Model Allegro trenowany dedykowanie na parze EN↔PL.
+        # Architektura Marian (transformer-big, 209M parametrów) —
+        # ten sam kod co Helsinki, prefiks >>pol<< wymusza wyjście polskie.
+        # Jakość (ChrF EN→PL): 86.2 — porównywalna z NLLB przy ~5× mniejszym modelu.
+        "hf_nazwa":   "allegro/BiDi-eng-pol",
+        "ct2_katalog": "bidi-eng-pol-ct2",
+        "tok_katalog": "bidi-eng-pol-tok",
+        "typ":        "marian",
+        "tgt_prefix": ">>pol<<",   # wymusza polski jako język docelowy
+        "etykieta":   "Allegro BiDi EN↔PL  (~400 MB,  CPU / GPU)",
     },
 }
 
