@@ -1,0 +1,20 @@
+WAŻNE UWAGI DO PROJEKTU TranslatorPDF
+======================================
+
+1. MODEL HELSINKI
+   - Helsinki-NLP/opus-mt-en-pl NIE ISTNIEJE na HuggingFace.
+   - Helsinki-NLP/opus-mt-pl-en ISTNIEJE, ale tłumaczy w odwrotnym kierunku
+     (polski → angielski) — nie nadaje się do tego projektu.
+   - Helsinki-NLP/opus-mt-en-sla tłumaczy na języki POŁUDNIOWOSŁOWIAŃSKIE
+     (serbski, chorwacki, słoweński) — NIE na polski; prefiks >>pl<< jest
+     ignorowany. BŁĘDNY WYBÓR.
+   - PRAWIDŁOWY MODEL: Helsinki-NLP/opus-mt-en-zlw
+     (zachodniosłowiańskie: polski, czeski, łużycki)
+     Prefiks wymuszający polski: >>pol<< (nie >>pl<<!)
+
+2. CUDA I WERSJA PYTHONA
+   - PyTorch z obsługą CUDA działa TYLKO z Pythonem 3.12 (i starszymi).
+   - Python 3.13+ NIE MA kółek PyTorch z CUDA — brak wsparcia.
+   - Aplikację należy uruchamiać przez środowisko wirtualne .venv
+     zbudowane na Pythonie 3.12:
+       F:\AI_Agent\Claude\TranslatorPDF\uruchom.bat

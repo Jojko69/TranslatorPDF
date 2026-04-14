@@ -4,9 +4,9 @@ core/translator.py
 Backend tłumaczenia oparty na CTranslate2.
 
 Obsługuje trzy modele:
-  1. NLLB-3.3B   – facebook/nllb-200-3.3B          (~6.6 GB VRAM)
-  2. NLLB-1.3B   – facebook/nllb-200-distilled-1.3B (~2.6 GB VRAM)
-  3. Helsinki    – Helsinki-NLP/opus-mt-en-pl        (~300 MB)
+  1. MADLAD-3B  – google/madlad400-3b-mt             (~3 GB VRAM)
+  2. NLLB-1.3B  – facebook/nllb-200-distilled-1.3B  (~2.6 GB VRAM)
+  3. Helsinki   – Helsinki-NLP/opus-mt-en-zlw        (~300 MB)
 
 Przy pierwszym użyciu modelu:
   - Pobiera tokenizer z HuggingFace i zapisuje lokalnie
@@ -29,14 +29,17 @@ MODEL_DIR = Path(__file__).parent.parent / "models"
 # ---------------------------------------------------------------------------
 
 MODELE = {
-    "nllb-3.3B": {
-        "hf_nazwa":   "facebook/nllb-200-3.3B",
-        "ct2_katalog": "nllb-3.3B-ct2",
-        "tok_katalog": "nllb-3.3B-tok",
-        "typ":        "nllb",
-        "src_lang":   "eng_Latn",
-        "tgt_lang":   "pol_Latn",
-        "etykieta":   "NLLB-3.3B  (najlepsza jakość,  ~6.6 GB VRAM)",
+    "madlad-3B": {
+        # NLLB-3.3B powodował OOM na RTX 3060 Ti (8 GB).
+        # MADLAD-400-3B to model T5 od Google trenowany na 400 językach,
+        # int8 zajmuje ~3 GB VRAM — mieści się z zapasem na inferencję.
+        # Format wejścia: "<2pl> {tekst}" — prefiks wskazuje język docelowy.
+        "hf_nazwa":   "google/madlad400-3b-mt",
+        "ct2_katalog": "madlad400-3b-ct2",
+        "tok_katalog": "madlad400-3b-tok",
+        "typ":        "madlad",
+        "tgt_prefix": "<2pl>",   # prefiks języka polskiego
+        "etykieta":   "MADLAD-3B  (najlepsza jakość,  ~3 GB VRAM)",
     },
     "nllb-1.3B": {
         "hf_nazwa":   "facebook/nllb-200-distilled-1.3B",
@@ -173,7 +176,7 @@ class Translator:
 
         # --- Model CTranslate2 ---
         if not ct2_sciezka.exists():
-            _log(f"Konwersja modelu {cfg['hf_nazwa']} → CTranslate2 int8")
+            _log(f"Konwersja modelu {cfg['hf_nazwa']} -> CTranslate2 int8")
             _log("(Może potrwać kilka minut i wymaga dużo RAM — jednorazowo)")
             try:
                 from ctranslate2.converters import TransformersConverter
@@ -224,10 +227,18 @@ class Translator:
                 pass
 
         _log("Ładowanie tokenizera...")
-        from transformers import AutoTokenizer
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            str(MODEL_DIR / cfg["tok_katalog"])
-        )
+        # MADLAD używa T5Tokenizer — AutoTokenizer też działa, ale T5Tokenizer
+        # obsługuje poprawnie tokeny specjalne jak <2pl>
+        if cfg["typ"] == "madlad":
+            from transformers import T5Tokenizer
+            self._tokenizer = T5Tokenizer.from_pretrained(
+                str(MODEL_DIR / cfg["tok_katalog"])
+            )
+        else:
+            from transformers import AutoTokenizer
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                str(MODEL_DIR / cfg["tok_katalog"])
+            )
 
         _log(f"Ładowanie modelu CTranslate2 na {self.urzadzenie.upper()}...")
         import ctranslate2
@@ -271,19 +282,16 @@ class Translator:
         cfg = MODELE[klucz]
         tokenizer = self._tokenizer
         model = self._ct2_model
-        jest_nllb = cfg["typ"] == "nllb"
+        typ = cfg["typ"]
 
-        # Tokenizacja
-        if jest_nllb:
+        # Tokenizacja — przygotuj wejście zależnie od architektury modelu
+        if typ == "nllb":
             tokenizer.src_lang = cfg["src_lang"]
             wejscie = teksty
         else:
-            # Marian: jeśli model obsługuje wiele języków, dodaj prefiks >>pl<<
-            prefiks_jezykowy = cfg.get("tgt_prefix", "")
-            if prefiks_jezykowy:
-                wejscie = [f"{prefiks_jezykowy} {t}" for t in teksty]
-            else:
-                wejscie = teksty
+            # Marian (Helsinki) i MADLAD: prefiks języka w tekście źródłowym
+            prefiks = cfg.get("tgt_prefix", "")
+            wejscie = [f"{prefiks} {t}" if prefiks else t for t in teksty]
 
         zakodowane = tokenizer(
             wejscie,
@@ -299,7 +307,7 @@ class Translator:
         ]
 
         # Inferencja
-        if jest_nllb:
+        if typ == "nllb":
             prefiks_ct2 = [[cfg["tgt_lang"]]] * len(teksty)
             wyniki = model.translate_batch(
                 zrodlowe_tokeny,
@@ -316,7 +324,7 @@ class Translator:
                 )
                 przetlumaczone.append(tekst)
         else:
-            # Helsinki/Marian
+            # Helsinki/Marian i MADLAD — encoder-decoder bez target_prefix
             wyniki = model.translate_batch(
                 zrodlowe_tokeny,
                 max_decoding_length=512,
