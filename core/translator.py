@@ -205,12 +205,16 @@ class Translator:
                     _log("Pobieranie wag modelu Marian...")
                     model = MarianMTModel.from_pretrained(cfg["hf_nazwa"])
                     tok_lok = _AutoTok.from_pretrained(str(tok_sciezka))
-                    if model.config.vocab_size != len(tok_lok):
-                        _log(
-                            f"Wyrównuję słownik: model={model.config.vocab_size}"
-                            f" → tokenizer={len(tok_lok)}"
-                        )
-                        model.resize_token_embeddings(len(tok_lok))
+                    # Zawsze wyrównuj osadzenia do rozmiaru tokenizera.
+                    # config.vocab_size może zgadzać się z tokenizerem (oboje 32000),
+                    # ale rzeczywiste macierze wag mogą mieć inny rozmiar (np. 31999) —
+                    # CTranslate2 czyta macierze, nie config, stąd błąd konwersji.
+                    # resize_token_embeddings jest bezpieczne gdy rozmiary już się zgadzają.
+                    _log(
+                        f"Wyrównuję osadzenia: {model.model.shared.num_embeddings}"
+                        f" → {len(tok_lok)}"
+                    )
+                    model.resize_token_embeddings(len(tok_lok))
                     tmp = Path(tempfile.mkdtemp(prefix="ct2_conv_"))
                     try:
                         model.save_pretrained(str(tmp))
