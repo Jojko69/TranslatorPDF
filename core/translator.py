@@ -63,15 +63,17 @@ MODELE = {
     },
     "bidi": {
         # Model Allegro trenowany dedykowanie na parze EN↔PL.
-        # Architektura Marian (transformer-big, 209M parametrów) —
-        # ten sam kod co Helsinki, prefiks >>pol<< wymusza wyjście polskie.
+        # Architektura Marian (transformer-big, 209M parametrów).
         # Jakość (ChrF EN→PL): 86.2 — porównywalna z NLLB przy ~5× mniejszym modelu.
-        "hf_nazwa":   "allegro/BiDi-eng-pol",
-        "ct2_katalog": "bidi-eng-pol-ct2",
+        # UWAGA: CTranslate2 zgłasza błąd vocab mismatch (32000 vs 31999) przy konwersji
+        # tego modelu — bug po stronie CT2. Używamy transformers natywnie (typ marian_hf),
+        # model ładowany jako float16 (~400 MB VRAM).
+        "hf_nazwa":    "allegro/BiDi-eng-pol",
+        "mdl_katalog": "bidi-eng-pol-mdl",   # katalog dla wag HF (nie CT2)
         "tok_katalog": "bidi-eng-pol-tok",
-        "typ":        "marian",
-        "tgt_prefix": ">>pol<<",   # wymusza polski jako język docelowy
-        "etykieta":   "Allegro BiDi EN↔PL  (~400 MB,  CPU / GPU)",
+        "typ":         "marian_hf",
+        "tgt_prefix":  ">>pol<<",            # wymusza polski jako język docelowy
+        "etykieta":    "Allegro BiDi EN↔PL  (~400 MB,  CPU / GPU)",
     },
 }
 
@@ -136,7 +138,8 @@ class Translator:
     """
 
     def __init__(self):
-        self._ct2_model = None
+        self._ct2_model = None      # ctranslate2.Translator (dla modeli CT2)
+        self._hf_model = None       # transformers model (dla typ marian_hf)
         self._tokenizer = None
         self._aktywny_model: Optional[str] = None
         self.urzadzenie = "cpu"
@@ -146,8 +149,13 @@ class Translator:
     # ------------------------------------------------------------------
 
     def model_gotowy(self, klucz: str) -> bool:
-        """Zwraca True jeśli model jest już pobrany i skonwertowany."""
+        """Zwraca True jeśli model jest już pobrany i gotowy do użycia."""
         cfg = MODELE[klucz]
+        if cfg.get("typ") == "marian_hf":
+            return (
+                (MODEL_DIR / cfg["tok_katalog"]).exists()
+                and (MODEL_DIR / cfg["mdl_katalog"]).exists()
+            )
         return (
             (MODEL_DIR / cfg["ct2_katalog"]).exists()
             and (MODEL_DIR / cfg["tok_katalog"]).exists()
@@ -163,7 +171,9 @@ class Translator:
         log: Callable[[str], None] = None,
     ) -> bool:
         """
-        Pobiera tokenizer z HuggingFace i konwertuje model do CTranslate2 int8.
+        Pobiera tokenizer z HuggingFace i przygotowuje model do użycia.
+        Dla modeli CT2: konwertuje do formatu CTranslate2 int8.
+        Dla modeli marian_hf: zapisuje wagi HF bez konwersji.
         Zwraca True przy sukcesie.
         """
         def _log(msg):
@@ -173,9 +183,8 @@ class Translator:
         MODEL_DIR.mkdir(parents=True, exist_ok=True)
         cfg = MODELE[klucz]
         tok_sciezka = MODEL_DIR / cfg["tok_katalog"]
-        ct2_sciezka = MODEL_DIR / cfg["ct2_katalog"]
 
-        # --- Tokenizer ---
+        # --- Tokenizer (wspólny dla wszystkich typów) ---
         if not tok_sciezka.exists():
             _log(f"Pobieranie tokenizera: {cfg['hf_nazwa']} ...")
             try:
@@ -187,54 +196,41 @@ class Translator:
                 _log(f"BŁĄD pobierania tokenizera: {e}")
                 return False
 
-        # --- Model CTranslate2 ---
+        # --- Ścieżka natywna (transformers) dla modeli marian_hf ---
+        if cfg.get("typ") == "marian_hf":
+            mdl_sciezka = MODEL_DIR / cfg["mdl_katalog"]
+            if not mdl_sciezka.exists():
+                _log(f"Pobieranie wag modelu {cfg['hf_nazwa']} ...")
+                _log("(Jednorazowe pobieranie — może potrwać kilka minut)")
+                try:
+                    from transformers import MarianMTModel
+                    model = MarianMTModel.from_pretrained(cfg["hf_nazwa"])
+                    model.save_pretrained(str(mdl_sciezka))
+                    _log("Model zapisany.")
+                except Exception as e:
+                    _log(f"BŁĄD pobierania modelu: {e}")
+                    import shutil
+                    if mdl_sciezka.exists():
+                        shutil.rmtree(mdl_sciezka, ignore_errors=True)
+                    return False
+            return True
+
+        # --- Ścieżka CTranslate2 (wszystkie pozostałe typy) ---
+        ct2_sciezka = MODEL_DIR / cfg["ct2_katalog"]
         if not ct2_sciezka.exists():
             _log(f"Konwersja modelu {cfg['hf_nazwa']} -> CTranslate2 int8")
             _log("(Może potrwać kilka minut i wymaga dużo RAM — jednorazowo)")
             try:
                 import shutil
                 from ctranslate2.converters import TransformersConverter
-
-                if cfg.get("typ") == "marian":
-                    # Modele Marian mogą mieć rozbieżność o 1 między rozmiarem
-                    # słownika tokenizera a osadzeniami modelu (np. BiDi 32000 vs 31999).
-                    # Rozwiązanie: wczytaj model, wyrównaj osadzenia, zapisz tymczasowo,
-                    # skonwertuj z lokalnego katalogu.
-                    import tempfile
-                    from transformers import MarianMTModel, AutoTokenizer as _AutoTok
-                    _log("Pobieranie wag modelu Marian...")
-                    model = MarianMTModel.from_pretrained(cfg["hf_nazwa"])
-                    tok_lok = _AutoTok.from_pretrained(str(tok_sciezka))
-                    # Zawsze wyrównuj osadzenia do rozmiaru tokenizera.
-                    # config.vocab_size może zgadzać się z tokenizerem (oboje 32000),
-                    # ale rzeczywiste macierze wag mogą mieć inny rozmiar (np. 31999) —
-                    # CTranslate2 czyta macierze, nie config, stąd błąd konwersji.
-                    # resize_token_embeddings jest bezpieczne gdy rozmiary już się zgadzają.
-                    _log(
-                        f"Wyrównuję osadzenia: {model.model.shared.num_embeddings}"
-                        f" → {len(tok_lok)}"
-                    )
-                    model.resize_token_embeddings(len(tok_lok))
-                    tmp = Path(tempfile.mkdtemp(prefix="ct2_conv_"))
-                    try:
-                        model.save_pretrained(str(tmp))
-                        tok_lok.save_pretrained(str(tmp))
-                        del model   # zwolnij RAM przed konwersją
-                        konwerter = TransformersConverter(str(tmp), low_cpu_mem_usage=True)
-                        konwerter.convert(str(ct2_sciezka), quantization="int8", force=True)
-                    finally:
-                        shutil.rmtree(tmp, ignore_errors=True)
-                else:
-                    konwerter = TransformersConverter(
-                        cfg["hf_nazwa"],
-                        low_cpu_mem_usage=True,
-                    )
-                    konwerter.convert(str(ct2_sciezka), quantization="int8", force=True)
-
+                konwerter = TransformersConverter(
+                    cfg["hf_nazwa"],
+                    low_cpu_mem_usage=True,
+                )
+                konwerter.convert(str(ct2_sciezka), quantization="int8", force=True)
                 _log("Model skonwertowany i zapisany.")
             except Exception as e:
                 _log(f"BŁĄD konwersji: {e}")
-                # Usuń ewentualnie niepełny katalog
                 import shutil
                 if ct2_sciezka.exists():
                     shutil.rmtree(ct2_sciezka, ignore_errors=True)
@@ -262,6 +258,7 @@ class Translator:
 
         # Zwolnij poprzedni model i wyczyść VRAM przed załadowaniem nowego
         self._ct2_model = None
+        self._hf_model = None
         self._tokenizer = None
         if self.urzadzenie == "cuda":
             try:
@@ -286,6 +283,29 @@ class Translator:
                 str(MODEL_DIR / cfg["tok_katalog"])
             )
 
+        # --- Ładowanie modelu natywnego (marian_hf) ---
+        if cfg["typ"] == "marian_hf":
+            import torch
+            from transformers import MarianMTModel
+            _log(f"Ładowanie modelu MarianMT (float16) na {self.urzadzenie.upper()}...")
+            self._hf_model = MarianMTModel.from_pretrained(
+                str(MODEL_DIR / cfg["mdl_katalog"]),
+                torch_dtype=torch.float16,
+            )
+            self._hf_model = self._hf_model.to(self.urzadzenie)
+            self._hf_model.eval()
+            self._aktywny_model = klucz
+            if self.urzadzenie == "cuda":
+                try:
+                    uzyta = torch.cuda.memory_allocated() // (1024 ** 2)
+                    _log(f"Model załadowany. VRAM zajęta: {uzyta} MB")
+                except Exception:
+                    _log("Model załadowany.")
+            else:
+                _log("Model załadowany.")
+            return
+
+        # --- Ładowanie modelu CTranslate2 ---
         _log(f"Ładowanie modelu CTranslate2 na {self.urzadzenie.upper()}...")
         import ctranslate2
 
@@ -327,8 +347,35 @@ class Translator:
 
         cfg = MODELE[klucz]
         tokenizer = self._tokenizer
-        model = self._ct2_model
         typ = cfg["typ"]
+
+        # --- Inferencja natywna (marian_hf) ---
+        if typ == "marian_hf":
+            import torch
+            prefiks = cfg.get("tgt_prefix", "")
+            wejscie = [f"{prefiks} {t}" if prefiks else t for t in teksty]
+            zakodowane = tokenizer(
+                wejscie,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=512,
+            )
+            device = next(self._hf_model.parameters()).device
+            zakodowane = {k: v.to(device) for k, v in zakodowane.items()}
+            with torch.no_grad():
+                wyniki_ids = self._hf_model.generate(
+                    **zakodowane,
+                    max_new_tokens=512,
+                    num_beams=4,
+                )
+            return [
+                tokenizer.decode(ids, skip_special_tokens=True)
+                for ids in wyniki_ids
+            ]
+
+        # --- Inferencja CTranslate2 ---
+        model = self._ct2_model
 
         # Tokenizacja — przygotuj wejście zależnie od architektury modelu
         if typ == "nllb":
@@ -457,5 +504,6 @@ class Translator:
     def zwolnij(self) -> None:
         """Zwalnia model z pamięci GPU/CPU."""
         self._ct2_model = None
+        self._hf_model = None
         self._tokenizer = None
         self._aktywny_model = None
